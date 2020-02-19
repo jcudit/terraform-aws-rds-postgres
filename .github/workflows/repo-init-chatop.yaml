@@ -1,0 +1,101 @@
+name: Initialize Repository (.repo-init)
+
+
+on:
+  issue_comment:
+    types: [created]
+
+jobs:
+  build:
+
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - name: Store required context in environment
+        run: |
+          echo ::set-env name=COMMENT_BODY::$(
+            jq -rc '.comment.body' $GITHUB_EVENT_PATH
+          )
+          echo ::set-env name=ISSUE_NUMBER::$(
+            jq -rc .issue.number $GITHUB_EVENT_PATH
+          )
+          echo ::set-env name=ISSUE_HTML_URL::$(
+            jq -rc '.issue.html_url' $GITHUB_EVENT_PATH
+          )
+          echo ::set-env name=ACTION_HTML_URL::$(
+            echo https://github.com/${GITHUB_REPOSITORY}/actions
+          )
+          echo ::set-env name=ISSUE_ACTOR::$(printf ${GITHUB_ACTOR})
+
+      - name: Match the `init-repo` chatop or bail
+        run: echo ${COMMENT_BODY} | egrep -q "^\.repo-init "
+
+      - name: Debug Context
+        run: |
+          jq -rc '.' $GITHUB_EVENT_PATH
+
+      - name: Acknowledge chatop on calling Issue
+        uses: octokit/request-action@v1.1.0
+        id: ack_comment
+        with:
+          route: POST /repos/:owner/:repo/issues/${{ env.ISSUE_NUMBER }}/comments
+          body: |
+            👋 @${{ env.ISSUE_ACTOR }} - Starting Action.
+            Follow along on the [Actions tab](${{ env.ACTION_HTML_URL }}).
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Parse `.repo-init` arguments
+        run: |
+          echo ::set-env name=PROVIDER::$(echo ${COMMENT_BODY} | cut -d ' ' -f 2)
+          echo ::set-env name=MODULE_NAME::$(echo ${COMMENT_BODY} | cut -d ' ' -f 3)
+          echo ::set-env name=DESCRIPTION::$(echo ${COMMENT_BODY} | cut -d ' ' -f 4-)
+
+      - name: Create a `repo-init` branch
+        uses: peterjgrainger/action-create-branch@v1.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          branch: repo-init
+
+      - name: Checkout the repo to make edits
+        uses: actions/checkout@master
+        with:
+          ref: repo-init
+
+      - name: Update README with `PROVIDER` and `MODULE_NAME`
+        uses: cschleiden/replace-tokens@v1
+        with:
+          tokenPrefix: '{'
+          tokenSuffix: '}'
+          files: '["README.md"]'
+        env:
+          PROVIDER: ${{ env.PROVIDER }}
+          MODULE_NAME: ${{ env.MODULE_NAME }}
+          DESCRIPTION:  ${{ env.DESCRIPTION }}
+
+      - name: Update README with a pointer to initialization Issue Template
+        run: |
+          cat << EOF >> ${GITHUB_WORKSPACE}/README.md
+
+          ---
+
+          This repository was initialized with an Issue Template.
+          [See here](https://github.com/${GITHUB_REPOSITORY}/issues/new/choose).
+          EOF
+
+      - name: Create Pull Request
+        id: cpr
+        uses: peter-evans/create-pull-request@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: Auto-generated README edits
+          author-email: hubot@github.com
+          author-name: Hubot
+          title: Initialize Terraform Module Repository
+          body: |
+            Launched from ${{ env.ISSUE_HTML_URL }}
+            /cc @${{ env.ISSUE_ACTOR }}
+          branch: repo-init
+          branch-suffix: none
